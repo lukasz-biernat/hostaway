@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nginx-staging
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/lukasz-biernat/hostaway.git
+    targetRevision: staging
+    path: helm
+    helm:
+      valueFiles: # Optional: specify additional values files
+        - values-stg.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: external-staging
+
+  syncPolicy:
+    automated:
+      prune: true # Delete resources from cluster if removed from Git
+      selfHeal: true # Revert any manual changes in cluster back to Git state
+    syncOptions:
+      - CreateNamespace=true # Argo CD will create the 'my-webapp-prod' namespace if it doesn't exist
+      - ApplyOutOfSyncOnly=true # Only apply resources that are out of sync (improves performance for large apps)
