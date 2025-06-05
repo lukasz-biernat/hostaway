@@ -7,17 +7,20 @@ name: Build and Push Docker Image
 
 # Triggers
 on:
-  # Trigger the action manually from the UI
-  workflow_dispatch:
   # Trigger the action when a version tag is pushed
   push:
     branches:
+      - staging
       - master
+  # Trigger the action manually from the UI
+  workflow_dispatch:
 
 jobs:
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
+    outputs:
+      commit_short_sha: ${{ steps.vars.outputs.short_sha }}
 
     steps:
       - name: Checkout code
@@ -40,6 +43,7 @@ jobs:
         run: |
           calculatedSha=$(git rev-parse --short ${{ github.sha }})
           echo "COMMIT_SHORT_SHA=$calculatedSha" >> $GITHUB_ENV
+          echo "short_sha=$calculatedSha" >> "$GITHUB_OUTPUT"
 
       - name: Confirm git commit SHA output
         run: echo ${{ env.COMMIT_SHORT_SHA }}
@@ -53,21 +57,57 @@ jobs:
           platforms: linux/arm64
           tags: ${{ env.DOCKER_REGISTRY }}/lukasz-biernat/${{ env.DOCKER_IMAGE_NAME }}:${{ env.COMMIT_SHORT_SHA }}
 
-      - name: Update image tag in Kubernetes deployment manifest
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update image tag for staging values
+        if: github.ref == 'refs/heads/staging'
         run: |
           cd helm
-          echo "Updating values.yaml with new image: ${{ env.COMMIT_SHORT_SHA }}"
-          sed -i "s|^  tag:.*|  tag: ${{ env.COMMIT_SHORT_SHA }}|g" values.yaml
+          echo "Updating values-stg.yaml with new image: ${{ needs.build-and-push.outputs.commit_short_sha }}"
+          sed -i "s|^  tag:.*|  tag: ${{ needs.build-and-push.outputs.commit_short_sha }}|g" values-stg.yaml
 
-          cat values.yaml
+          cat values-stg.yaml
 
-      - name: Commit and push updated manifest
+      - name: Commit and push updated staging values
+        if: github.ref == 'refs/heads/staging'
         run: |
           cd helm
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "chore(my-nginx-app): Update image tag to ${{ env.COMMIT_SHORT_SHA }}" || echo "No changes to commit"
+          git commit -m "GA: Update image tag to ${{ needs.build-and-push.outputs.commit_short_sha }} for staging values" || echo "No changes to commit"
+          git push
+        env:
+          # Use a PAT for pushing to the manifests repository
+          # This PAT needs 'repo' scope. Store it as a GitHub Secret.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update image tag for prod values
+        if: github.ref == 'refs/heads/master'
+        run: |
+          cd helm
+          echo "Updating values-prod.yaml with new image: ${{ needs.build-and-push.outputs.commit_short_sha }}"
+          sed -i "s|^  tag:.*|  tag: ${{ needs.build-and-push.outputs.commit_short_sha }}|g" values-prod.yaml
+
+          cat values-prod.yaml
+
+      - name: Commit and push updated prod values
+        if: github.ref == 'refs/heads/master'
+        run: |
+          cd helm
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "GA: Update image tag to ${{ needs.build-and-push.outputs.commit_short_sha }} for prod values" || echo "No changes to commit"
           git push
         env:
           # Use a PAT for pushing to the manifests repository
