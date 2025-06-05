@@ -35,6 +35,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set short git commit SHA
+        id: vars
+        run: |
+          calculatedSha=$(git rev-parse --short ${{ github.sha }})
+          echo "COMMIT_SHORT_SHA=$calculatedSha" >> $GITHUB_ENV
+
+      - name: Confirm git commit SHA output
+        run: echo ${{ env.COMMIT_SHORT_SHA }}
+
       - name: Build and push Landing Page Docker image
         uses: docker/build-push-action@v6
         with:
@@ -42,4 +51,25 @@ jobs:
           #file: Dockerfile
           push: true
           platforms: linux/arm64
-          tags: ${{ env.DOCKER_REGISTRY }}/lukasz-biernat/${{ env.DOCKER_IMAGE_NAME }}:stable
+          tags: ${{ env.DOCKER_REGISTRY }}/lukasz-biernat/${{ env.DOCKER_IMAGE_NAME }}:${{ env.COMMIT_SHORT_SHA }}
+
+      - name: Update image tag in Kubernetes deployment manifest
+        run: |
+          cd helm
+          echo "Updating values.yaml with new image: ${{ env.COMMIT_SHORT_SHA }}"
+          sed -i "s|^  tag:.*|  tag: ${{ env.COMMIT_SHORT_SHA }}|g" values.yaml
+
+          cat values.yaml
+
+      - name: Commit and push updated manifest
+        run: |
+          cd helm
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "chore(my-nginx-app): Update image tag to ${{ env.COMMIT_SHORT_SHA }}" || echo "No changes to commit"
+          git push
+        env:
+          # Use a PAT for pushing to the manifests repository
+          # This PAT needs 'repo' scope. Store it as a GitHub Secret.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
